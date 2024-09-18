@@ -56,12 +56,12 @@ def run(turl, attackvars, method):
 
             DEBUG("Simplifying...")
             av = attackvars.copy()
-            for k in attackvars:
+            for kx in attackvars:
                 av_temp = av.copy()
-                del av_temp[k]
+                del av_temp[kx]
                 r = pool.request(method, turl, fields=av_temp, headers=headers)
-                if k in r.data.decode():
-                    # we can remove k
+                if kx in r.data.decode():
+                    # we can remove kx
                     av = av_temp
             if av == attackvars:
                 print("Could not simplify")
